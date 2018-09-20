@@ -1,0 +1,83 @@
+﻿using UnityEngine;
+using System.Collections;
+
+public class Over : MonoBehaviour 
+{
+
+	public float timeInvicible;
+
+	float life;
+	bool invincible;
+
+	SpriteRenderer sprite;
+	BoxCollider2D box;
+
+	// Use this for initialization
+	void Start () 
+	{
+		life = 3;
+		invincible = false;
+		sprite = GetComponent<SpriteRenderer>();
+	
+	}
+
+	void OnCollisionEnter2D (Collision2D other)
+	{
+		if (other.collider.tag == "Sheep")
+		{
+			Leef();
+		}
+	}
+
+	void Leef()
+	{
+		if (!invincible)
+		{
+			life--;
+			less();
+		}
+	}
+
+	public void halfLeff()
+	{
+		if (!invincible)
+		{
+			life -= 0.5f; //questo perchè l'esplosione prende due volte il player per via dei due collider
+			less();
+		}
+	}
+
+	void less()
+	{
+		invincible = true;
+		Physics2D.IgnoreLayerCollision(10,8,true);
+		Invoke("notInvicible", timeInvicible);
+		
+		if (life == 0)
+		{
+			Debug.Log("gameover");
+		}
+	}
+	
+	void notInvicible()
+	{
+		Physics2D.IgnoreLayerCollision(10,8, false);
+		sprite.enabled = true;
+		invincible = false;
+	}
+
+	void Update()
+	{
+		if (invincible)
+		{
+			if (sprite.enabled) 
+			{
+				sprite.enabled = false;
+			}
+			else 
+			{
+				sprite.enabled = true;
+			}
+		}
+	}
+}

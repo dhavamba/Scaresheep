@@ -1,0 +1,432 @@
+using UnityEngine;
+
+/*
+ * Questa classe controlla il movimento di Scaresheep, essa è divisa in varie regioni, 
+ * dove ognuna supervisiona un comportamento del movimento.
+ * */
+
+public class Control : MonoBehaviour 
+{
+
+	#region Var
+	
+	#region public
+	
+	public float speed; //velocità di movimento di Scaresheep
+	public float jumpForce; //ampiezza del salto di Scaresheep
+	public float fallVelocity; //velocità massima di caduta (utile per via della fisica)
+
+	#endregion
+	
+	#region Pointer
+	
+	public Rigidbody2D body{get;private set;} //puntatore al componente rigidbody
+	public Transform transf{get;private set;} //puntatore al coponente  transform
+	public BoxCollider2D box{get;private set;} //puntatore ai collider (sono due)
+	
+	#endregion
+	
+	#region Climb
+
+	bool blockHorizontal; //booleano per indicare se il personaggio ha di fronte a se un ostacolo
+	bool blockVertical;  //booleano per indicare se il personaggio ha sopra di se un ostacolo
+
+	#endregion
+
+	#endregion
+
+	#region Move
+
+	float auxFoot; //tempo per un passo
+	bool pan; //pan alternato del passo
+
+	public Vector2 plusVelocity;
+	public float input{get;set;} //float(-1,1) che viene preso da pulsanti
+	public bool facingRight{get;set;} //booleano che indica la direzione di Scaresheep (true = destra)
+	
+	#endregion
+
+	#region Auxiliary
+	
+	RaycastHit2D hit;  //collisore per eventuali raycast
+	Vector2 aux; //vettore ausiliare
+	float velocityOld; //float della velocità di Scaresheep del frame precedente (utile per la correzzione di un bug) 
+
+	#endregion
+	
+	#region isGround?
+
+	public LayerMask whatIsGround;  //indica cosa è terreno
+	public bool[] grounded{get; private set;}  //booleano per indicare se Scaresheep sta cadendo o è a terra
+	int auxTemp;
+
+	const float DISTANCE_GROUNDED = 0.2f;
+	const int PRESENT_GROUNDED = 4;
+	const float GRAVITY_SCALE = 2f; //quanto la forza di gravita agisce su Scaresheep
+	
+	#endregion
+
+	#region Radius
+
+	[Range(0, 1f)]
+	public float radiusVertical; //grandezza del raggio per capire se è contro un muro verticale
+
+	[Range(0, 1f)]
+	public float radiusHorizontal; //grandezza del raggio per capire se è contro un muro orizzontale
+
+	#endregion
+	
+	#region Singleton
+	
+	public static Control controller; //un puntatore statico ad un oggetto della classe ScaresheepControl (per Singleton)
+	
+	/*
+	 * Un singleton per la classe ScaresheepControl, visto che nel gioco sarà attivo solo e soltanto un oggetto di tale classe.
+	 * */
+	public static Control istance
+	{
+		get 
+		{
+			if (controller == null) 
+			{
+				controller = FindObjectOfType(typeof(Control)) as Control;
+			}
+			return controller;
+		}
+	}
+	
+	#endregion
+	
+	#region Start
+
+	/*
+	 * Start inizializza i puntatori e setta a true facingRight
+	 * */
+	void Start () 
+	{
+		grounded = new bool[5];
+
+		body = GetComponent<Rigidbody2D>() as Rigidbody2D;
+		box = GetComponent<BoxCollider2D>() as BoxCollider2D;
+		transf = GetComponent<Transform>() as Transform;
+
+		facingRight = true; //Scaresheep inizia rivolta verso destra
+	
+	}
+	
+	#endregion
+
+	#region Update
+	
+	/*
+	 * Per entrare nell'Update si deve controllare se il gioco non è in pausa o se Scaresheep non è morta.
+	 * Inoltre controllo un bug, visto che dev'essere visionato all'inizio di ogni ciclo per essere efficente.
+	 * */
+	void Update() 
+	{
+		Loop();
+	}
+
+	/*
+	 * Loop controlla se sono stati premuti i pulsanti, se sono premuti attiva delel funzioni
+	 * */
+	void Loop()
+	{
+		if (Input.GetButton("Jump"))
+		{
+			whenJump(); //Quando si preme Jump, si attiva una funzione che comprende tutti i casi possibili
+		}
+	}
+
+	/*
+	 * Questa funzione si attiva quando si preme il pulsante Jump e controlla tutti i casi possibili del sistema quando
+	 * si preme Jump
+	 * */
+	void whenJump()
+	{
+		// Se Scaresheep non è arrampicato Scaresheep salta normalmente, se ha già saltato e si trova vicino ad un muro o soffitto,
+		// si arrampicata su di esso.
+		if (grounded[PRESENT_GROUNDED] && !blockVertical)
+		{
+			Jump(); //Scaresheep salta
+		}
+	}
+
+	#endregion
+
+	#region fixedUpdate
+		
+	void FixedUpdate() 
+	{
+		BugAngle(); //Funzione che risolve il bug dell'angolo
+			
+		Grounded(); //controlla se Scaresheep è in volo o è a terra
+			
+		//se Scaresheep non è morta, entra nell'if
+		FixedLoop();
+	}
+
+	/*
+	 * Nel FixedUpdate si controlla lo stato di Scaresheep, principalmente se è a terra o in volo, se si può alzare, la sua
+	 * velocità, se è vicino ad un muro o un soffitto, se si può muovere e varie eccezioni
+	 * */
+	void FixedLoop()
+	{
+		BlockVertical(); //Si controlla se Scaresheep è presso una parete
+
+		//se sei in aria Scaresheep si alza se era abassata, inoltre si controlla che la velocità di caduta 
+		//non sia superiore oltre una certa soglia
+		if (!grounded[PRESENT_GROUNDED])
+		{
+			if (body.velocity.y < 0)
+			{
+				controlVelocity(); //Si controlla la velocità
+			}
+		}
+
+		if (!Input.GetButton("Fire1")) Move(); //Scaresheep si muove
+
+		//anim.SetFloat("Speed", Mathf.Abs(input)); //setta l'animazione della camminata
+
+	}
+
+	#endregion
+		
+	#region Ground
+
+	/*
+	 * Questa funzione vede se Scaresheep è nel terreno, per farlo crea un collider sotto di lui e vede se tocca il terreno,
+	 * se lo tocca vuol dire che è nel terreno, invece al contrario vuol dire che è ancora in volo.
+	 * */
+	void Grounded() 
+	{
+		hit = Physics2D.Linecast(new Vector2(box.bounds.min.x, box.bounds.min.y - DISTANCE_GROUNDED), new Vector2(box.bounds.max.x, box.bounds.min.y - DISTANCE_GROUNDED), whatIsGround );
+
+		if (hit.collider != null) 
+		{
+			grounded[auxTemp] = true;
+		}
+		else grounded[auxTemp] = false;
+
+		auxTemp++;
+		if (auxTemp == PRESENT_GROUNDED) auxTemp = 0;
+
+		if (!grounded[0] && !grounded[1] && !grounded[2] && !grounded[3] && grounded[PRESENT_GROUNDED])
+		{
+			//anim.SetBool("Grounded", false);
+		}
+		else if (grounded[0] && grounded[1] && grounded[2] && grounded[3] && !grounded[PRESENT_GROUNDED])
+		{
+			//anim.SetFloat("Speed", 0);
+			//anim.SetBool("Grounded", true);
+
+		}
+
+		if (grounded[0] && grounded[1] && grounded[2] && grounded[3]) grounded[PRESENT_GROUNDED] = true;
+		else if (!grounded[0] && !grounded[1] && !grounded[2] && !grounded[3]) grounded[PRESENT_GROUNDED] = false;
+	}
+
+	/*
+	 * Questa funziona controlla la velocità di caduta, visto che stiamo lavorando con al fisica la velocità di caduta
+	 * aumenterà sempre di più: questa funziona dà un limitatore a questa accellerazione.
+	 * */
+	void controlVelocity()
+	{
+		// Accellera l'aumento di velocità, questo serve per dare l'illusione al giocatore che la velocità è costante
+		if (body.velocity.y > -fallVelocity) 
+		{
+			body.velocity = new Vector2(body.velocity.x, body.velocity.y - 0.2f);
+		}
+		else
+		{
+			body.velocity = new Vector2(body.velocity.x, -fallVelocity); //setta la velocità a fallVelocity
+		}
+	}
+
+	#endregion
+
+	#region Utily
+
+	/*
+	 * Questa funzione porta Scaresheep ad un verso assegnato
+	 * */
+	public void facingDirection(bool facing)
+	{
+		if (facing != facingRight)
+		{
+			Flip();
+		}
+	}
+
+	/*
+	 * Funzione che risolve un bug, specificatamente un bug che alcune volte nell'angolo si bloccava sia l'animazione
+	 * che il movimento. Lo risolvo dicendo che sicuramente quando Scaresheep è in aria e la velocità di Scaresheep del frame 
+	 * precedente e del frame attuale sono pari a 0, vuol dire che è bloccato nell'angolo, quindi traslo il tutto di 
+	 * poco per sbloccare la situazione.
+	 * */
+	void BugAngle()
+	{
+		if (velocityOld == 0 && body.velocity.y == 0 && !grounded[PRESENT_GROUNDED])
+		{
+			//se il frame prima era grounded vuol dire che ero nel terreno, quindi sposto avanti a me per cadere
+			if (!grounded[auxTemp]) 
+			{
+				 if (facingRight) transf.Translate(Vector2.right * 0.1f);
+				else transf.Translate(Vector2.right * -0.1f);
+			}
+			//se il frame prima non era grounded vuol dire che sono bloccato, quindi mi sposto indietro a me per cadere
+			else 
+			{
+				if (facingRight) transf.Translate(Vector2.right * -0.1f);
+				else transf.Translate(Vector2.right * 0.1f);
+			}
+		}
+		
+		velocityOld = body.velocity.y;
+	}
+
+	#endregion
+
+	#region Move
+
+	/*
+	 * In questa funzione si muove Scaresheep ma prima di farla muovere si controlla che caso è e si attiva la funzione di
+	 * movimento idonea.
+	 * */
+	void Move() 
+	{
+		moveSimple (); 
+	}
+
+	/*
+	 * Scaresheep se non è arrampicata, si muove normalmente se non è bloccata da un muro.
+	 * */
+	void moveSimple() 
+	{
+		moveHorizontal(); //funzione ausiliare
+		if (!blockHorizontal) 
+		{
+			body.velocity = new Vector2(input * speed * Time.deltaTime, body.velocity.y) + plusVelocity;
+		}
+		else
+		{
+			body.velocity = new Vector2(0, body.velocity.y); //se sono bloccato distro dal raggio del muro
+		}
+	}
+
+	/*
+	 * funzione ausiliare che consente il movimento orizzontale: se la mia direzione è discorde con l'input flippo
+	 * l'immagine.
+	 * */
+	void moveHorizontal()
+	{
+		input = Input.GetAxis("Horizontal");
+
+		if ( (input < 0 && facingRight) || (input > 0 && !facingRight) ) 
+		{
+			Flip();
+		} 
+		
+	}
+
+	/*
+	 * Funzione ausiliare, controlla prima che si può camminare e se si può camminare setta la velocità. I due byte sono
+	 * un ottimizzazione perchè con Vertical devo solo settare la componente y della velocità e con Horizontal devo 
+	 * settare solo la componente x.
+	 * */
+	void moveClimb(bool finish, byte cross1, byte cross2)
+	{
+		//anim.SetFloat("Speed", Mathf.Abs(input));
+		if (!finish)
+		{
+			body.velocity = new Vector2(input * speed * Time.deltaTime * cross1, input * speed * Time.deltaTime * cross2);
+		}
+		else
+		{
+			body.velocity = Vector2.zero;
+		}
+	}
+
+	/*
+	 * Funzione che fà girare la sprite nel verso opposto
+	 * */
+	public void Flip() 
+	{
+		facingRight = !facingRight;
+
+		Vector3 theScale = transf.localScale;
+		theScale.x *= -1;
+		transf.localScale = theScale;
+		theScale.x *= -1;
+	}
+	
+	#endregion
+	
+	#region Jump
+
+	/*
+	 * Salto semplice quando sono a terra: applico una forza
+	 * */
+	void Jump() 
+	{
+		body.AddForce(new Vector2(0, jumpForce * 100));
+	}
+
+	#endregion
+
+	#region Block
+
+	/*
+	 * Funzione che controlla se sono bloccato presso una parete: applico dei raggi di lunghezza radiusHorizontal
+	 * davanti a me, se viene almeno uno toccato vuol dire che sono bloccato, se nessuno dei miei raggi tocca 
+	 * qualcosa vuol dire che ho spazio libero.
+	 * */
+	void OnTriggerEnter2D (Collider2D other)
+	{
+		if (other.tag == "Wall")
+		{
+			blockHorizontal = true;
+		}
+	}
+
+	void OnTriggerExit2D (Collider2D other)
+	{
+		if (other.tag == "Wall")
+		{
+			blockHorizontal = false;
+		}
+	}
+
+	/*
+	 * Funzione che controlla se ho un soffitto in prossimità, applico un raggio sopra Scaresheep (dipende se Scaresheep 
+	 * è abbassata o no) e vedo se colpisce qualcosa, se la colpisce vuol dire che sono in prossimita di una soffitto,
+	 * se non la colpisco non sono bloccato.
+	 * */
+	void BlockVertical()
+	{
+		aux.y = box.bounds.max.y;
+		aux.x = box.bounds.center.x;
+		hit = Physics2D.Raycast(aux, Vector2.up, radiusVertical, whatIsGround);
+		if (hit.collider != null && hit.collider.tag != "invisible") 
+		{
+			blockVertical = true;
+		}
+		else
+		{
+			blockVertical = false;
+		}
+	}
+
+	void controlRaycastClimb(float y, float radius) 
+	{
+		aux.x = box.bounds.center.x;
+		if (facingRight) aux.x += box.bounds.size.x * 0.5f;
+		else  aux.x += box.bounds.size.x * -0.5f;
+		aux.y = y;
+		if (facingRight) hit = Physics2D.Raycast(aux, Vector2.right, radius, whatIsGround);
+		else hit = Physics2D.Raycast(aux, -Vector2.right, radius, whatIsGround);
+	}
+	
+	#endregion
+
+}
